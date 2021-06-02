@@ -21,6 +21,7 @@ from mrcnn.config import Config
 from mrcnn import model as modellib
 from mrcnn import utils
 from mrcnn import visualize
+from sklearn import metrics
 
 from berries_train import BerryConfig, BerryDataset
 import argparse
@@ -43,8 +44,31 @@ class BerryConfigInference(BerryConfig):
     DETECTION_MIN_CONFIDENCE = 0.9
 
 
+
+def compute_ar(pred_boxes, gt_boxes, list_iou_thresholds):
+    #COMPUTES Average recall...
+    #see ... https://blog.zenggyu.com/en/post/2018-12-16/an-introduction-to-evaluation-metrics-for-object-detection/
+    #AR can be computed as two times the area under the recall-IOU curve
+    AR = []
+    for iou_threshold in list_iou_thresholds:
+
+        try:
+            recall, _ = utils.compute_recall(pred_boxes, gt_boxes, iou=iou_threshold)
+
+            AR.append(recall)
+
+        except Exception as e:
+   
+          AR.append(0.0)
+          pass
+
+    AUC = 2 * (metrics.auc(list_iou_thresholds, AR))
+    return AUC
+
+
 def run_eval(dataset, show_image=False):
     APs = []
+    ARs = []
     for image_id in dataset.image_ids:
         image, image_meta, gt_class_id, gt_bbox, gt_mask =\
             modellib.load_image_gt(dataset, inference_config,
@@ -65,12 +89,15 @@ def run_eval(dataset, show_image=False):
         
         _, ax = plt.subplots(1, figsize=(16,16))
 
+        
         AP = utils.compute_ap_range(gt_bbox, gt_class_id, gt_mask,
-                         r["rois"], r["class_ids"], r["scores"], r['masks'])
+                         r["rois"], r["class_ids"], r["scores"], r['masks'], verbose=0)
 
         #print (AP)
         APs.append(AP)
         
+        AR = compute_ar(r["rois"], gt_bbox, np.arange(0.5, 1.0, 0.05))
+        ARs.append(AR)
         visualize.display_instances(image, r['rois'], r['masks'], r['class_ids'], 
                             dataset_val.class_names, r['scores'], figsize=(8,8),ax=ax)
     
@@ -80,7 +107,7 @@ def run_eval(dataset, show_image=False):
         plt.savefig(os.path.join(OUTPUT_FOLDER, filename+".png"))
         if show_image:
             plt.show()
-    return APs
+    return APs, ARs
 
 if __name__=="__main__":
 
@@ -100,9 +127,18 @@ if __name__=="__main__":
     dataset_val.load_berry(BERRIES_DIR, "val")
     dataset_val.prepare()
 
-    APs = run_eval(dataset_val)
+    APs, ARs = run_eval(dataset_val)
+    mAP = np.mean(APs)
+    mAR = np.mean(ARs)
+
+    #see formula here ..
+    #f1 score 2 *PRECISION * RECALL/PRECISION + RECALL
+    #https://towardsdatascience.com/accuracy-precision-recall-or-f1-331fb37c5cb9
+    f1_score = 2 * ((mAP * mAR) / (mAP + mAR))
     
-    print("Mean AP over {} images: {:.3f}".format(len(APs), np.mean(APs)))
+    print("Mean AP over {} images: {:.3f}".format(len(APs), mAP))
+    print("Mean AR over {} images: {:.3f}".format(len(APs), mAR))
+    print("F1 score {} images: {:.3f}".format(len(APs), f1_score))
 
 
 
